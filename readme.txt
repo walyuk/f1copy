@@ -1,5 +1,9 @@
 F1COPY Ver 0.9 - Readme
 
+■ Download
+Get f1copy.exe from GitHub Releases (see Assets):
+https://github.com/yukioshibata/f1copy/releases
+
 ■ Overview
 F1COPY is a utility that streamlines Windows keyboard use.
 It provides copy/paste via F1/F2 keys, maps Caps Lock to Ctrl, and more.

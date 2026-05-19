@@ -1,5 +1,9 @@
 F1COPY Ver 0.9 - Readme
 
+■ ダウンロード
+f1copy.exe は GitHub Releases（Assets）から入手できます:
+https://github.com/yukioshibata/f1copy/releases
+
 ■ 概要
 F1COPYは、Windowsキーボードの操作を効率化するためのユーティリティツールです。
 F1/F2キーによるコピー＆ペースト、CapsLockのCtrl化などの機能を提供します。
