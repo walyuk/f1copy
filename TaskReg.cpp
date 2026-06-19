@@ -3,7 +3,9 @@
 #include <string>
 #include <shellapi.h>
 #include <taskschd.h>
+#include <lmcons.h>
 #pragma comment(lib, "taskschd.lib")
+#pragma comment(lib, "advapi32.lib")
 
 bool TaskReg::IsAdmin() {
     BOOL bIsAdmin = FALSE;
@@ -29,9 +31,75 @@ void TaskReg::RunAsAdmin(const wchar_t* args) {
     }
 }
 
+static bool GetExeDirectory(wchar_t* dir, DWORD cch) {
+    if (!GetModuleFileNameW(NULL, dir, cch))
+        return false;
+    wchar_t* lastSlash = wcsrchr(dir, L'\\');
+    if (!lastSlash)
+        return false;
+    *lastSlash = L'\0';
+    return true;
+}
+
+bool TaskReg::LaunchAsInteractiveUser() {
+    wchar_t szPath[MAX_PATH];
+    if (!GetModuleFileNameW(NULL, szPath, ARRAYSIZE(szPath)))
+        return false;
+
+    DWORD explorerPid = 0;
+    HWND hShell = FindWindowW(L"Shell_TrayWnd", NULL);
+    if (!hShell)
+        hShell = GetShellWindow();
+    if (!hShell)
+        return false;
+
+    GetWindowThreadProcessId(hShell, &explorerPid);
+    if (!explorerPid)
+        return false;
+
+    HANDLE hExplorer = OpenProcess(PROCESS_QUERY_INFORMATION, FALSE, explorerPid);
+    if (!hExplorer)
+        return false;
+
+    HANDLE hToken = NULL;
+    if (!OpenProcessToken(hExplorer, TOKEN_DUPLICATE, &hToken)) {
+        CloseHandle(hExplorer);
+        return false;
+    }
+    CloseHandle(hExplorer);
+
+    HANDLE hDupToken = NULL;
+    if (!DuplicateTokenEx(hToken, MAXIMUM_ALLOWED, NULL, SecurityImpersonation, TokenPrimary, &hDupToken)) {
+        CloseHandle(hToken);
+        return false;
+    }
+    CloseHandle(hToken);
+
+    STARTUPINFOW si = { sizeof(si) };
+    PROCESS_INFORMATION pi = { 0 };
+    BOOL ok = CreateProcessAsUserW(
+        hDupToken, szPath, NULL, NULL, NULL, FALSE,
+        0, NULL, NULL, &si, &pi);
+
+    CloseHandle(hDupToken);
+    if (!ok)
+        return false;
+
+    CloseHandle(pi.hProcess);
+    CloseHandle(pi.hThread);
+    return true;
+}
+
 bool TaskReg::Install() {
     wchar_t szPath[MAX_PATH];
     if (!GetModuleFileNameW(NULL, szPath, ARRAYSIZE(szPath))) return false;
+
+    wchar_t szDir[MAX_PATH];
+    if (!GetExeDirectory(szDir, ARRAYSIZE(szDir))) return false;
+
+    wchar_t userName[UNLEN + 1] = {0};
+    DWORD userNameLen = UNLEN + 1;
+    if (!GetUserNameW(userName, &userNameLen)) return false;
     
     HRESULT hr = CoInitializeEx(NULL, COINIT_MULTITHREADED);
     if (FAILED(hr)) return false;
@@ -65,6 +133,9 @@ bool TaskReg::Install() {
         BSTR bstrAuthorId = SysAllocString(L"Author");
         pPrincipal->put_Id(bstrAuthorId);
         SysFreeString(bstrAuthorId);
+        BSTR bstrUserId = SysAllocString(userName);
+        pPrincipal->put_UserId(bstrUserId);
+        SysFreeString(bstrUserId);
         pPrincipal->put_LogonType(TASK_LOGON_INTERACTIVE_TOKEN);
         pPrincipal->put_RunLevel(TASK_RUNLEVEL_LUA);
         pPrincipal->Release();
@@ -94,6 +165,14 @@ bool TaskReg::Install() {
             BSTR bstrTriggerId = SysAllocString(L"Trigger1");
             pTrigger->put_Id(bstrTriggerId);
             SysFreeString(bstrTriggerId);
+
+            ILogonTrigger *pLogonTrigger = NULL;
+            if (SUCCEEDED(pTrigger->QueryInterface(IID_ILogonTrigger, (void**)&pLogonTrigger))) {
+                BSTR bstrDelay = SysAllocString(L"PT10S");
+                pLogonTrigger->put_Delay(bstrDelay);
+                SysFreeString(bstrDelay);
+                pLogonTrigger->Release();
+            }
             pTrigger->Release();
         }
         pTriggerCollection->Release();
@@ -111,6 +190,9 @@ bool TaskReg::Install() {
                 BSTR bstrExePath = SysAllocString(szPath);
                 pExecAction->put_Path(bstrExePath);
                 SysFreeString(bstrExePath);
+                BSTR bstrWorkDir = SysAllocString(szDir);
+                pExecAction->put_WorkingDirectory(bstrWorkDir);
+                SysFreeString(bstrWorkDir);
                 pExecAction->Release();
             }
             pAction->Release();
@@ -119,15 +201,20 @@ bool TaskReg::Install() {
     }
 
     IRegisteredTask *pRegisteredTask = NULL;
+    VARIANT varUser;
+    VariantInit(&varUser);
+    varUser.vt = VT_BSTR;
+    varUser.bstrVal = SysAllocString(userName);
     hr = pRootFolder->RegisterTaskDefinition(
         bstrTaskName,
         pTask,
         TASK_CREATE_OR_UPDATE,
-        varEmpty,
+        varUser,
         varEmpty,
         TASK_LOGON_INTERACTIVE_TOKEN,
         varEmpty,
         &pRegisteredTask);
+    VariantClear(&varUser);
 
     if (pRegisteredTask) pRegisteredTask->Release();
     pTask->Release();

@@ -7,6 +7,50 @@
 #include "KeyHook.h"
 #include "SplashWnd.h"
 
+static const wchar_t* SINGLE_INSTANCE_MUTEX = L"Global\\f1copy_mutex_2026";
+static const wchar_t* HIDDEN_WND_CLASS      = L"f1copy_HiddenWnd";
+
+// Acquire a session-wide mutex visible across integrity levels (admin / standard).
+static HANDLE AcquireSingleInstanceMutex() {
+    SECURITY_DESCRIPTOR sd;
+    if (!InitializeSecurityDescriptor(&sd, SECURITY_DESCRIPTOR_REVISION))
+        return NULL;
+    if (!SetSecurityDescriptorDacl(&sd, TRUE, NULL, FALSE))
+        return NULL;
+
+    SECURITY_ATTRIBUTES sa = { sizeof(sa), &sd, FALSE };
+    HANDLE hMutex = CreateMutexW(&sa, TRUE, SINGLE_INSTANCE_MUTEX);
+    if (!hMutex)
+        return NULL;
+
+    if (GetLastError() == ERROR_ALREADY_EXISTS) {
+        CloseHandle(hMutex);
+        return NULL;
+    }
+    return hMutex;
+}
+
+static bool IsAnotherResidentInstanceRunning() {
+    if (FindWindowW(HIDDEN_WND_CLASS, NULL))
+        return true;
+
+    HANDLE hMutex = OpenMutexW(SYNCHRONIZE, FALSE, SINGLE_INSTANCE_MUTEX);
+    if (hMutex) {
+        CloseHandle(hMutex);
+        return true;
+    }
+    return false;
+}
+
+static void ShowHookInstallError() {
+    MessageBoxW(
+        NULL,
+        L"キーボードフックの設定に失敗しました。\n"
+        L"他のキーボード関連ソフトとの競合、またはセキュリティソフトの制限が原因の可能性があります。",
+        L"f1copy",
+        MB_OK | MB_ICONERROR);
+}
+
 int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmdLine, int nCmdShow) {
     SetPriorityClass(GetCurrentProcess(), HIGH_PRIORITY_CLASS);
     int argc;
@@ -24,7 +68,7 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmd
     }
 
     // --------------------------------------------------------------------
-    // Uninstall: remove Scancode Map + Task Scheduler entry, then quit
+    // Uninstall: restore Scancode Map + remove Task Scheduler entry, then quit
     // --------------------------------------------------------------------
     if (uninstall) {
         if (!TaskReg::IsAdmin()) {
@@ -33,8 +77,7 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmd
         }
         ScancodeMap::Uninstall();
         TaskReg::Uninstall();
-        // 常駐中のインスタンスに終了スプラッシュ付きで終了させる
-        HWND hWnd = FindWindowW(L"f1copy_HiddenWnd", NULL);
+        HWND hWnd = FindWindowW(HIDDEN_WND_CLASS, NULL);
         if (hWnd) PostMessageW(hWnd, WM_CLOSE, 0, 0);
         return 0;
     }
@@ -49,24 +92,32 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmd
         }
         ScancodeMap::Install();
         TaskReg::Install();
-        // After install, fall through to start resident operation.
+        TaskReg::LaunchAsInteractiveUser();
+        return 0;
     }
 
     // --------------------------------------------------------------------
     // Resident operation (normal launch or post-install)
     // --------------------------------------------------------------------
-    HANDLE hMutex = CreateMutexW(NULL, TRUE, L"Global\\f1copy_mutex_2026");
-    if (GetLastError() == ERROR_ALREADY_EXISTS) {
-        CloseHandle(hMutex);
+    if (IsAnotherResidentInstanceRunning())
         return 0;
-    }
+
+    HANDLE hMutex = AcquireSingleInstanceMutex();
+    if (!hMutex)
+        return 0;
 
     if (!TrayIcon::Init(hInstance)) {
         CloseHandle(hMutex);
         return 1;
     }
 
-    KeyHook::Install();
+    if (!KeyHook::Install()) {
+        ShowHookInstallError();
+        TrayIcon::Cleanup();
+        CloseHandle(hMutex);
+        return 1;
+    }
+
     SplashWnd::Show(hInstance, true);
 
     MSG msg;

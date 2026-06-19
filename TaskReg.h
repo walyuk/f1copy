@@ -7,6 +7,8 @@ public:
     static void RunAsAdmin(const wchar_t* args);
     static bool Install();
     static void Uninstall();
+    // Start a non-elevated resident instance in the interactive user session.
+    static bool LaunchAsInteractiveUser();
 };
 
 #endif

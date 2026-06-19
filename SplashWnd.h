@@ -5,7 +5,7 @@
 
 class SplashWnd {
 public:
-    // isStartup=true: 起動時（機能一覧） / false: 終了時（タイトルのみ）
+    // isStartup=true: 起動時（機能一覧） / false: 終了時（終了メッセージ）
     static void Show(HINSTANCE hInstance, bool isStartup);
 };
 

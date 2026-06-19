@@ -8,17 +8,51 @@
 static HWND g_hHiddenWnd = NULL;
 static NOTIFYICONDATAW g_nid = {0};
 static HINSTANCE g_hInst = NULL;
+static UINT g_uTaskbarCreatedMsg = 0;
+
+static bool IsShellTrayReady() {
+    return FindWindowW(L"Shell_TrayWnd", NULL) != NULL;
+}
+
+static bool AddTrayIcon() {
+    return Shell_NotifyIconW(NIM_ADD, &g_nid) == TRUE;
+}
+
+static bool WaitForShellTray(DWORD timeoutMs) {
+    const DWORD pollMs = 100;
+    DWORD waited = 0;
+    while (waited < timeoutMs) {
+        if (IsShellTrayReady())
+            return true;
+        Sleep(pollMs);
+        waited += pollMs;
+    }
+    return IsShellTrayReady();
+}
+
+static bool AddTrayIconWithRetry() {
+    WaitForShellTray(60000);
+
+    for (int attempt = 0; attempt < 30; ++attempt) {
+        if (AddTrayIcon())
+            return true;
+        Sleep(1000);
+    }
+    return false;
+}
 
 LRESULT CALLBACK HiddenWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
+    if (msg == g_uTaskbarCreatedMsg) {
+        AddTrayIcon();
+        return 0;
+    }
     if (msg == WM_APP_TRAYMSG) {
         if (lParam == WM_LBUTTONDBLCLK) {
-            // Show exit splash and schedule quit
             SplashWnd::Show(g_hInst, false);
         }
         return 0;
     }
     if (msg == WM_CLOSE) {
-        // Show exit splash, then PostQuitMessage will be triggered from SplashWnd WM_DESTROY
         SplashWnd::Show(g_hInst, false);
         return 0;
     }
@@ -27,21 +61,23 @@ LRESULT CALLBACK HiddenWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam
 
 bool TrayIcon::Init(HINSTANCE hInstance) {
     g_hInst = hInstance;
+    g_uTaskbarCreatedMsg = RegisterWindowMessageW(L"TaskbarCreated");
+
     WNDCLASSW wc = {0};
     wc.lpfnWndProc = HiddenWndProc;
     wc.hInstance = hInstance;
     wc.lpszClassName = L"f1copy_HiddenWnd";
     wc.hIcon = LoadIconW(hInstance, MAKEINTRESOURCEW(IDI_F1COPY_ICON));
     RegisterClassW(&wc);
-    
+
     g_hHiddenWnd = CreateWindowW(
         wc.lpszClassName, L"f1copy Hidden Window",
         0, 0, 0, 0, 0,
         HWND_MESSAGE, NULL, hInstance, NULL
     );
-    
+
     if (!g_hHiddenWnd) return false;
-    
+
     g_nid.cbSize = sizeof(NOTIFYICONDATAW);
     g_nid.hWnd = g_hHiddenWnd;
     g_nid.uID = 1;
@@ -49,8 +85,8 @@ bool TrayIcon::Init(HINSTANCE hInstance) {
     g_nid.uCallbackMessage = WM_APP_TRAYMSG;
     g_nid.hIcon = LoadIconW(hInstance, MAKEINTRESOURCEW(IDI_F1COPY_ICON));
     lstrcpyW(g_nid.szTip, L"f1copy (Double click to exit)");
-    
-    Shell_NotifyIconW(NIM_ADD, &g_nid);
+
+    AddTrayIconWithRetry();
     return true;
 }
 

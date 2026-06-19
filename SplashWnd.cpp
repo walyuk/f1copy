@@ -101,10 +101,6 @@ static void DrawArrow(HDC hdc, int x, int y, int w, int h, HFONT hFont) {
     SelectObject(hdc, hOld);
 }
 
-static void BuildVersionLine(wchar_t* buf, int cch) {
-    swprintf_s(buf, cch, L"F1COPY Ver %s", F1COPY_VERSION);
-}
-
 static void OnPaint(HWND hwnd) {
     PAINTSTRUCT ps;
     HDC hdc = BeginPaint(hwnd, &ps);
@@ -152,9 +148,6 @@ static void OnPaint(HWND hwnd) {
     lfArrow.lfQuality = CLEARTYPE_QUALITY;
     lstrcpyW(lfArrow.lfFaceName, L"Segoe UI Symbol");
     HFONT hFontArrow = CreateFontIndirectW(&lfArrow);
-
-    wchar_t verLine[64];
-    BuildVersionLine(verLine, 64);
 
     if (g_IsStartup) {
         // 起動時: F1COPY Ver X + キー割り当て一覧
@@ -209,14 +202,14 @@ static void OnPaint(HWND hwnd) {
             DrawValue(hdcMem, vx, cy, VAL_W, ROW_H, entries[i].val, hFontKey);
         }
     } else {
-        // 終了時: セパレータ + 中央寄せタイトル + セパレータ
+        // 終了時: セパレータ + 中央寄せメッセージ + セパレータ
         DrawSeparator(hdcMem, 48, W);
         {
-            RECT rcVer = { 0, 58, W, 98 };
+            RECT rcMsg = { 0, 58, W, 98 };
             SetBkMode(hdcMem, TRANSPARENT);
             SetTextColor(hdcMem, CLR_TITLE);
             HFONT hOld = (HFONT)SelectObject(hdcMem, hFontTitle);
-            DrawTextW(hdcMem, verLine, -1, &rcVer,
+            DrawTextW(hdcMem, L"F1COPY.EXE 終了します", -1, &rcMsg,
                       DT_CENTER | DT_VCENTER | DT_SINGLELINE);
             SelectObject(hdcMem, hOld);
         }

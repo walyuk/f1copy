@@ -2,12 +2,18 @@
 #include <windows.h>
 #include <vector>
 #include <cstring>
+#include <algorithm>
 
 // ---------------------------------------------------------------------------
 // Registry location for Scancode Map
 // ---------------------------------------------------------------------------
 static const wchar_t* REG_KEY  = L"SYSTEM\\CurrentControlSet\\Control\\Keyboard Layout";
 static const wchar_t* REG_VAL  = L"Scancode Map";
+
+// Backup of the pre-install Scancode Map (restored on -uninstall).
+static const wchar_t* BACKUP_KEY = L"SOFTWARE\\f1copy";
+static const wchar_t* BACKUP_VAL = L"OriginalScancodeMap";
+static const wchar_t* BACKUP_PRESENT_VAL = L"OriginalScancodeMapPresent";
 
 // ---------------------------------------------------------------------------
 // Our remappings:
@@ -26,7 +32,6 @@ static const ScEntry k_OurEntries[] = {
     { 0x001D, 0x003A },  // CapsLock  -> LCtrl
     { 0x003A, 0x0046 },  // ScrollLock-> CapsLock
 };
-static const int k_EntryCount = (int)(sizeof(k_OurEntries) / sizeof(k_OurEntries[0]));
 
 // ---------------------------------------------------------------------------
 // Low-level helpers to parse / build the binary Scancode Map blob
@@ -39,43 +44,36 @@ static const int k_EntryCount = (int)(sizeof(k_OurEntries) / sizeof(k_OurEntries
 //   [0x00000000]      DWORD          terminator
 // ---------------------------------------------------------------------------
 
-// Parse the REG_BINARY blob into a list of ScEntry (excluding the terminator).
 static std::vector<ScEntry> ParseBlob(const std::vector<BYTE>& blob) {
     std::vector<ScEntry> entries;
-    // Minimum: 8 bytes header + 4 bytes count + 4 bytes terminator = 16 bytes
     if (blob.size() < 16) return entries;
 
     DWORD count = 0;
     memcpy(&count, blob.data() + 8, sizeof(DWORD));
     if (count < 1) return entries;
 
-    size_t numEntries = count - 1; // exclude terminator
-    size_t needed = 12 + numEntries * 4; // 8 header + 4 count + entries + 4 term
+    size_t numEntries = count - 1;
+    size_t needed = 12 + numEntries * 4;
     if (blob.size() < needed) return entries;
 
     for (size_t i = 0; i < numEntries; ++i) {
         ScEntry e;
         memcpy(&e, blob.data() + 12 + i * 4, sizeof(ScEntry));
-        if (e.target != 0 || e.source != 0) // skip null entries
+        if (e.target != 0 || e.source != 0)
             entries.push_back(e);
     }
     return entries;
 }
 
-// Build a REG_BINARY blob from a list of ScEntry.
 static std::vector<BYTE> BuildBlob(const std::vector<ScEntry>& entries) {
-    DWORD count = (DWORD)(entries.size() + 1); // +1 for terminator
+    DWORD count = (DWORD)(entries.size() + 1);
     std::vector<BYTE> blob(8 + 4 + entries.size() * 4 + 4, 0);
-    // Header (version=0, flags=0) is already zeroed.
     memcpy(blob.data() + 8, &count, sizeof(DWORD));
     for (size_t i = 0; i < entries.size(); ++i)
         memcpy(blob.data() + 12 + i * 4, &entries[i], sizeof(ScEntry));
-    // Terminator is already zeroed.
     return blob;
 }
 
-// Read the current Scancode Map from the registry.
-// Returns an empty vector if the key/value does not exist.
 static std::vector<BYTE> ReadRegistry() {
     std::vector<BYTE> blob;
     HKEY hKey = NULL;
@@ -92,7 +90,6 @@ static std::vector<BYTE> ReadRegistry() {
     return blob;
 }
 
-// Write a new blob to the registry (requires admin rights).
 static bool WriteRegistry(const std::vector<BYTE>& blob) {
     HKEY hKey = NULL;
     LONG res = RegOpenKeyExW(HKEY_LOCAL_MACHINE, REG_KEY, 0, KEY_SET_VALUE, &hKey);
@@ -103,7 +100,6 @@ static bool WriteRegistry(const std::vector<BYTE>& blob) {
     return res == ERROR_SUCCESS;
 }
 
-// Delete the registry value entirely (when all entries have been removed).
 static void DeleteRegistry() {
     HKEY hKey = NULL;
     if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, REG_KEY, 0, KEY_SET_VALUE, &hKey) == ERROR_SUCCESS) {
@@ -112,55 +108,147 @@ static void DeleteRegistry() {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Public API
-// ---------------------------------------------------------------------------
+static bool HasBackupStored() {
+    HKEY hKey = NULL;
+    if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, BACKUP_KEY, 0, KEY_READ, &hKey) != ERROR_SUCCESS)
+        return false;
 
-bool ScancodeMap::Install() {
-    // 1. Read current map.
-    auto blob    = ReadRegistry();
-    auto entries = ParseBlob(blob);
+    DWORD type = 0, size = 0;
+    LONG res = RegQueryValueExW(hKey, BACKUP_PRESENT_VAL, NULL, &type, NULL, &size);
+    RegCloseKey(hKey);
+    return res == ERROR_SUCCESS && type == REG_DWORD;
+}
 
-    // 2. Remove any existing entries whose source matches one we own
-    //    (prevents duplicates and overwrites conflicting third-party entries).
+static bool SaveOriginalBackup(const std::vector<BYTE>& original, bool hadOriginal) {
+    HKEY hKey = NULL;
+    DWORD disp = 0;
+    if (RegCreateKeyExW(HKEY_LOCAL_MACHINE, BACKUP_KEY, 0, NULL, 0,
+                        KEY_SET_VALUE, NULL, &hKey, &disp) != ERROR_SUCCESS)
+        return false;
+
+    LONG res = ERROR_SUCCESS;
+    if (hadOriginal) {
+        res = RegSetValueExW(hKey, BACKUP_VAL, 0, REG_BINARY,
+                             original.data(), (DWORD)original.size());
+    } else {
+        RegDeleteValueW(hKey, BACKUP_VAL);
+    }
+
+    DWORD present = hadOriginal ? 1u : 0u;
+    if (res == ERROR_SUCCESS) {
+        res = RegSetValueExW(hKey, BACKUP_PRESENT_VAL, 0, REG_DWORD,
+                               (const BYTE*)&present, sizeof(present));
+    }
+
+    RegCloseKey(hKey);
+    return res == ERROR_SUCCESS;
+}
+
+static bool LoadOriginalBackup(std::vector<BYTE>* original, bool* hadOriginal) {
+    HKEY hKey = NULL;
+    if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, BACKUP_KEY, 0, KEY_READ, &hKey) != ERROR_SUCCESS)
+        return false;
+
+    DWORD present = 0, size = sizeof(present), type = 0;
+    if (RegQueryValueExW(hKey, BACKUP_PRESENT_VAL, NULL, &type,
+                         (LPBYTE)&present, &size) != ERROR_SUCCESS
+        || type != REG_DWORD) {
+        RegCloseKey(hKey);
+        return false;
+    }
+
+    *hadOriginal = (present != 0);
+    original->clear();
+    if (*hadOriginal) {
+        size = 0;
+        if (RegQueryValueExW(hKey, BACKUP_VAL, NULL, &type, NULL, &size) != ERROR_SUCCESS
+            || type != REG_BINARY || size == 0) {
+            RegCloseKey(hKey);
+            return false;
+        }
+        original->resize(size);
+        RegQueryValueExW(hKey, BACKUP_VAL, NULL, &type, original->data(), &size);
+    }
+
+    RegCloseKey(hKey);
+    return true;
+}
+
+static void DeleteOriginalBackup() {
+    HKEY hKey = NULL;
+    if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, BACKUP_KEY, 0, KEY_SET_VALUE, &hKey) == ERROR_SUCCESS) {
+        RegDeleteValueW(hKey, BACKUP_VAL);
+        RegDeleteValueW(hKey, BACKUP_PRESENT_VAL);
+        RegCloseKey(hKey);
+    }
+    RegDeleteKeyW(HKEY_LOCAL_MACHINE, BACKUP_KEY);
+}
+
+static std::vector<ScEntry> ApplyOurEntries(const std::vector<ScEntry>& base) {
+    std::vector<ScEntry> entries = base;
     for (const auto& ours : k_OurEntries) {
         entries.erase(
             std::remove_if(entries.begin(), entries.end(),
                 [&](const ScEntry& e) { return e.source == ours.source; }),
             entries.end());
     }
-
-    // 3. Append our entries.
     for (const auto& e : k_OurEntries)
         entries.push_back(e);
+    return entries;
+}
 
-    // 4. Write back.
+static void RemoveOurEntriesLegacy(std::vector<ScEntry>* entries) {
+    for (const auto& ours : k_OurEntries) {
+        entries->erase(
+            std::remove_if(entries->begin(), entries->end(),
+                [&](const ScEntry& e) {
+                    return e.source == ours.source && e.target == ours.target;
+                }),
+            entries->end());
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Public API
+// ---------------------------------------------------------------------------
+
+bool ScancodeMap::Install() {
+    // Backup the current map only on the first -install (before we modify anything).
+    if (!HasBackupStored()) {
+        auto original = ReadRegistry();
+        bool hadOriginal = !original.empty();
+        if (!SaveOriginalBackup(original, hadOriginal))
+            return false;
+    }
+
+    auto entries = ApplyOurEntries(ParseBlob(ReadRegistry()));
     return WriteRegistry(BuildBlob(entries));
 }
 
 void ScancodeMap::Uninstall() {
-    auto blob    = ReadRegistry();
-    auto entries = ParseBlob(blob);
+    std::vector<BYTE> original;
+    bool hadOriginal = false;
 
-    // Remove only our entries (matched by both source AND target).
-    for (const auto& ours : k_OurEntries) {
-        entries.erase(
-            std::remove_if(entries.begin(), entries.end(),
-                [&](const ScEntry& e) {
-                    return e.source == ours.source && e.target == ours.target;
-                }),
-            entries.end());
+    if (LoadOriginalBackup(&original, &hadOriginal)) {
+        if (hadOriginal)
+            WriteRegistry(original);
+        else
+            DeleteRegistry();
+        DeleteOriginalBackup();
+        return;
     }
 
+    // Fallback for installs that predate backup support.
+    auto entries = ParseBlob(ReadRegistry());
+    RemoveOurEntriesLegacy(&entries);
     if (entries.empty())
-        DeleteRegistry();       // No remappings left: remove the value entirely.
+        DeleteRegistry();
     else
         WriteRegistry(BuildBlob(entries));
 }
 
 bool ScancodeMap::IsInstalled() {
-    auto blob    = ReadRegistry();
-    auto entries = ParseBlob(blob);
+    auto entries = ParseBlob(ReadRegistry());
 
     for (const auto& ours : k_OurEntries) {
         bool found = false;
