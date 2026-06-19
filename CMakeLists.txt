@@ -12,7 +12,8 @@ add_executable(f1copy WIN32
     TrayIcon.cpp TrayIcon.h
     KeyHook.cpp KeyHook.h
     TaskReg.cpp TaskReg.h
+    ScancodeMap.cpp ScancodeMap.h
     f1copy.rc
 )
 
-target_link_libraries(f1copy PRIVATE user32 shell32 gdi32 advapi32 ole32 oleaut32 taskschd)
+target_link_libraries(f1copy PRIVATE user32 shell32 gdi32 advapi32 ole32 oleaut32 taskschd dwmapi)

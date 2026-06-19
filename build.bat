@@ -1,9 +1,9 @@
 @echo off
 set "VSCMD_START_DIR=%CD%"
-call "C:\Program Files\Microsoft Visual Studio\18\Community\VC\Auxiliary\Build\vcvars64.bat"
+call "C:\Program Files\Microsoft Visual Studio\18\Community\Common7\Tools\VsDevCmd.bat" -arch=x64
 
 if %errorlevel% neq 0 (
-    echo Visual Studio 2022 Community not found or vcvars64.bat failed
+    echo Visual Studio Community not found or VsDevCmd.bat failed
     exit /b %errorlevel%
 )
 

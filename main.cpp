@@ -31,6 +31,8 @@ static HANDLE AcquireSingleInstanceMutex() {
 }
 
 static bool IsAnotherResidentInstanceRunning() {
+    if (FindWindowExW(HWND_MESSAGE, NULL, HIDDEN_WND_CLASS, NULL))
+        return true;
     if (FindWindowW(HIDDEN_WND_CLASS, NULL))
         return true;
 
@@ -42,6 +44,13 @@ static bool IsAnotherResidentInstanceRunning() {
     return false;
 }
 
+static HWND FindResidentWindow() {
+    HWND hWnd = FindWindowExW(HWND_MESSAGE, NULL, HIDDEN_WND_CLASS, NULL);
+    if (hWnd)
+        return hWnd;
+    return FindWindowW(HIDDEN_WND_CLASS, NULL);
+}
+
 static void ShowHookInstallError() {
     MessageBoxW(
         NULL,
@@ -49,6 +58,10 @@ static void ShowHookInstallError() {
         L"他のキーボード関連ソフトとの競合、またはセキュリティソフトの制限が原因の可能性があります。",
         L"f1copy",
         MB_OK | MB_ICONERROR);
+}
+
+static void ShowInstallError(const wchar_t* detail) {
+    MessageBoxW(NULL, detail, L"f1copy", MB_OK | MB_ICONERROR);
 }
 
 int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmdLine, int nCmdShow) {
@@ -77,7 +90,7 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmd
         }
         ScancodeMap::Uninstall();
         TaskReg::Uninstall();
-        HWND hWnd = FindWindowW(HIDDEN_WND_CLASS, NULL);
+        HWND hWnd = FindResidentWindow();
         if (hWnd) PostMessageW(hWnd, WM_CLOSE, 0, 0);
         return 0;
     }
@@ -90,8 +103,14 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmd
             TaskReg::RunAsAdmin(L"-install");
             return 0;
         }
-        ScancodeMap::Install();
-        TaskReg::Install();
+        if (!ScancodeMap::Install()) {
+            ShowInstallError(L"Scancode Map の登録に失敗しました。");
+            return 1;
+        }
+        if (!TaskReg::Install()) {
+            ShowInstallError(L"タスクスケジューラへの登録に失敗しました。");
+            return 1;
+        }
         SplashWnd::ShowAndWait(hInstance, SplashMode::Install);
         TaskReg::LaunchAsInteractiveUser();
         return 0;
