@@ -92,6 +92,7 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmd
         }
         ScancodeMap::Install();
         TaskReg::Install();
+        SplashWnd::ShowAndWait(hInstance, SplashMode::Install);
         TaskReg::LaunchAsInteractiveUser();
         return 0;
     }
@@ -118,7 +119,7 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmd
         return 1;
     }
 
-    SplashWnd::Show(hInstance, true);
+    SplashWnd::Show(hInstance, SplashMode::Startup);
 
     MSG msg;
     while (GetMessage(&msg, NULL, 0, 0)) {

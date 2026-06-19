@@ -6,7 +6,7 @@
 #pragma comment(lib, "dwmapi.lib")
 
 static HWND g_hSplashWnd = NULL;
-static bool g_IsStartup  = true;
+static SplashMode g_SplashMode = SplashMode::Startup;
 
 // Fade state
 static BYTE  g_Alpha     = 0;
@@ -149,7 +149,7 @@ static void OnPaint(HWND hwnd) {
     lstrcpyW(lfArrow.lfFaceName, L"Segoe UI Symbol");
     HFONT hFontArrow = CreateFontIndirectW(&lfArrow);
 
-    if (g_IsStartup) {
+    if (g_SplashMode == SplashMode::Startup) {
         // 起動時: F1COPY Ver X + キー割り当て一覧
         {
             RECT rcTitle = { 0, 28, W, 68 };
@@ -201,8 +201,7 @@ static void OnPaint(HWND hwnd) {
             DrawArrow(hdcMem, ax, cy, ARW_W, ROW_H, hFontArrow);
             DrawValue(hdcMem, vx, cy, VAL_W, ROW_H, entries[i].val, hFontKey);
         }
-    } else {
-        // 終了時: セパレータ + 中央寄せメッセージ + セパレータ
+    } else if (g_SplashMode == SplashMode::Exit) {
         DrawSeparator(hdcMem, 48, W);
         {
             RECT rcMsg = { 0, 58, W, 98 };
@@ -214,6 +213,30 @@ static void OnPaint(HWND hwnd) {
             SelectObject(hdcMem, hOld);
         }
         DrawSeparator(hdcMem, 108, W);
+    } else {
+        // -install 完了: 再起動案内
+        DrawSeparator(hdcMem, 28, W);
+        {
+            RECT rcTitle = { 0, 38, W, 76 };
+            SetBkMode(hdcMem, TRANSPARENT);
+            SetTextColor(hdcMem, CLR_TITLE);
+            HFONT hOld = (HFONT)SelectObject(hdcMem, hFontTitle);
+            DrawTextW(hdcMem, L"インストール完了", -1, &rcTitle,
+                      DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+            SelectObject(hdcMem, hOld);
+        }
+        {
+            RECT rcMsg = { 32, 84, W - 32, 156 };
+            SetBkMode(hdcMem, TRANSPARENT);
+            SetTextColor(hdcMem, CLR_SUB);
+            HFONT hOld = (HFONT)SelectObject(hdcMem, hFontSub);
+            DrawTextW(hdcMem,
+                      L"PC を再起動してください\n"
+                      L"(CapsLock / ScrollLock の設定を反映)",
+                      -1, &rcMsg, DT_CENTER | DT_WORDBREAK);
+            SelectObject(hdcMem, hOld);
+        }
+        DrawSeparator(hdcMem, 166, W);
     }
 
     BitBlt(hdc, 0, 0, W, H, hdcMem, 0, 0, SRCCOPY);
@@ -280,7 +303,7 @@ LRESULT CALLBACK SplashWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam
 
         case WM_DESTROY:
             g_hSplashWnd = NULL;
-            if (!g_IsStartup)
+            if (g_SplashMode != SplashMode::Startup)
                 PostQuitMessage(0);
             break;
 
@@ -290,8 +313,16 @@ LRESULT CALLBACK SplashWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam
     return 0;
 }
 
-void SplashWnd::Show(HINSTANCE hInstance, bool isStartup) {
-    g_IsStartup = isStartup;
+static int SplashHeight(SplashMode mode) {
+    switch (mode) {
+    case SplashMode::Startup: return 260;
+    case SplashMode::Install: return 200;
+    default:                  return 160;
+    }
+}
+
+void SplashWnd::Show(HINSTANCE hInstance, SplashMode mode) {
+    g_SplashMode = mode;
 
     WNDCLASSW wc = {};
     if (!GetClassInfoW(hInstance, L"f1copy_SplashWnd", &wc)) {
@@ -303,7 +334,7 @@ void SplashWnd::Show(HINSTANCE hInstance, bool isStartup) {
     }
 
     int w = 520;
-    int h = isStartup ? 260 : 160;
+    int h = SplashHeight(mode);
     int x = (GetSystemMetrics(SM_CXSCREEN) - w) / 2;
     int y = (GetSystemMetrics(SM_CYSCREEN) - h) / 2;
 
@@ -322,5 +353,17 @@ void SplashWnd::Show(HINSTANCE hInstance, bool isStartup) {
         DwmSetWindowAttribute(g_hSplashWnd,
             DWMWA_WINDOW_CORNER_PREFERENCE, &attr, sizeof(attr));
         UpdateWindow(g_hSplashWnd);
+    }
+}
+
+void SplashWnd::ShowAndWait(HINSTANCE hInstance, SplashMode mode) {
+    Show(hInstance, mode);
+    if (mode == SplashMode::Startup)
+        return;
+
+    MSG msg;
+    while (GetMessage(&msg, NULL, 0, 0)) {
+        TranslateMessage(&msg);
+        DispatchMessage(&msg);
     }
 }

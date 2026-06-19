@@ -48,12 +48,12 @@ LRESULT CALLBACK HiddenWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam
     }
     if (msg == WM_APP_TRAYMSG) {
         if (lParam == WM_LBUTTONDBLCLK) {
-            SplashWnd::Show(g_hInst, false);
+            SplashWnd::Show(g_hInst, SplashMode::Exit);
         }
         return 0;
     }
     if (msg == WM_CLOSE) {
-        SplashWnd::Show(g_hInst, false);
+        SplashWnd::Show(g_hInst, SplashMode::Exit);
         return 0;
     }
     return DefWindowProc(hwnd, msg, wParam, lParam);
