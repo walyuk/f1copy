@@ -1,4 +1,4 @@
-- f1copy.exe ver 0.9 概要
+- f1copy.exe ver 0.91 概要
 
 * 基本機能
   - Windows 11 64bit にて稼働する

@@ -1,4 +1,4 @@
-F1COPY Ver 0.9 - Readme
+F1COPY Ver 0.91 - Readme
 
 ■ ダウンロード
 f1copy.exe は GitHub Releases（Assets）から入手できます:

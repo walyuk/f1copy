@@ -1,4 +1,4 @@
-F1COPY Ver 0.9 - Readme
+F1COPY Ver 0.91 - Readme
 
 ■ Download
 Get f1copy.exe from GitHub Releases (see Assets):
