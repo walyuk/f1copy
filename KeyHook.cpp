@@ -74,9 +74,10 @@ LRESULT CALLBACK LowLevelKeyboardProc(int nCode, WPARAM wParam, LPARAM lParam) {
     KBDLLHOOKSTRUCT* pKey = (KBDLLHOOKSTRUCT*)lParam;
     WORD  vk         = (WORD)pKey->vkCode;
     bool  isDown     = (wParam == WM_KEYDOWN || wParam == WM_SYSKEYDOWN);
-    bool  isInjected = (pKey->dwExtraInfo == INJECTED_KEY_INFO);
+    bool  isInjected = (pKey->dwExtraInfo == INJECTED_KEY_INFO)
+                    || ((pKey->flags & LLKHF_INJECTED) != 0);
 
-    // Always pass through our own injected events.
+    // Pass through injected events from this app and other keyboard utilities.
     if (isInjected)
         return CallNextHookEx(g_hHook, nCode, wParam, lParam);
 
