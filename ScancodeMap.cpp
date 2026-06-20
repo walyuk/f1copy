@@ -16,7 +16,8 @@ static const wchar_t* BACKUP_VAL = L"OriginalScancodeMap";
 static const wchar_t* BACKUP_PRESENT_VAL = L"OriginalScancodeMapPresent";
 
 // ---------------------------------------------------------------------------
-// Our remappings (CapsLock -> Ctrl is handled in KeyHook):
+// Our remappings:
+//   CapsLock  (scan 0x003A) --> Left Ctrl (scan 0x001D)
 //   ScrollLock(scan 0x0046) --> CapsLock  (scan 0x003A)
 //
 // Entry format (little-endian WORDs packed into a DWORD):
@@ -27,13 +28,10 @@ struct ScEntry {
     WORD source; // "from"
 };
 
-// CapsLock -> Ctrl is handled in KeyHook (hook must see physical scan 0x3A).
 static const ScEntry k_OurEntries[] = {
+    { 0x001D, 0x003A },  // CapsLock -> Left Ctrl
     { 0x003A, 0x0046 },  // ScrollLock -> CapsLock
 };
-
-// Legacy install used Scancode Map for CapsLock -> LCtrl; remove on apply/uninstall.
-static const WORD k_LegacyCapsLockSource = 0x003A;
 
 // ---------------------------------------------------------------------------
 // Low-level helpers to parse / build the binary Scancode Map blob
@@ -186,16 +184,8 @@ static void DeleteOriginalBackup() {
     RegDeleteKeyW(HKEY_LOCAL_MACHINE, BACKUP_KEY);
 }
 
-static void RemoveLegacyCapsLockMap(std::vector<ScEntry>* entries) {
-    entries->erase(
-        std::remove_if(entries->begin(), entries->end(),
-            [&](const ScEntry& e) { return e.source == k_LegacyCapsLockSource; }),
-        entries->end());
-}
-
 static std::vector<ScEntry> ApplyOurEntries(const std::vector<ScEntry>& base) {
     std::vector<ScEntry> entries = base;
-    RemoveLegacyCapsLockMap(&entries);
     for (const auto& ours : k_OurEntries) {
         entries.erase(
             std::remove_if(entries.begin(), entries.end(),
@@ -208,7 +198,6 @@ static std::vector<ScEntry> ApplyOurEntries(const std::vector<ScEntry>& base) {
 }
 
 static void RemoveOurEntriesLegacy(std::vector<ScEntry>* entries) {
-    RemoveLegacyCapsLockMap(entries);
     for (const auto& ours : k_OurEntries) {
         entries->erase(
             std::remove_if(entries->begin(), entries->end(),
@@ -224,16 +213,19 @@ static void RemoveOurEntriesLegacy(std::vector<ScEntry>* entries) {
 // ---------------------------------------------------------------------------
 
 bool ScancodeMap::Install() {
+    auto current = ReadRegistry();
+    auto updated = BuildBlob(ApplyOurEntries(ParseBlob(current)));
+    if (current == updated)
+        return true;
+
     // Backup the current map only on the first -install (before we modify anything).
     if (!HasBackupStored()) {
-        auto original = ReadRegistry();
-        bool hadOriginal = !original.empty();
-        if (!SaveOriginalBackup(original, hadOriginal))
+        bool hadOriginal = !current.empty();
+        if (!SaveOriginalBackup(current, hadOriginal))
             return false;
     }
 
-    auto entries = ApplyOurEntries(ParseBlob(ReadRegistry()));
-    return WriteRegistry(BuildBlob(entries));
+    return WriteRegistry(updated);
 }
 
 void ScancodeMap::Uninstall() {
@@ -268,4 +260,46 @@ bool ScancodeMap::IsInstalled() {
         if (!found) return false;
     }
     return true;
+}
+
+bool ScancodeMap::HasInstallState() {
+    if (HasBackupStored())
+        return true;
+    return IsInstalled();
+}
+
+bool ScancodeMap::IsPendingReboot() {
+    if (!IsInstalled())
+        return false;
+
+    HKEY hKey = NULL;
+    if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, REG_KEY, 0, KEY_READ, &hKey) != ERROR_SUCCESS)
+        return false;
+
+    FILETIME lastWrite = {0};
+    LONG res = RegQueryInfoKeyW(
+        hKey, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, &lastWrite);
+    RegCloseKey(hKey);
+    if (res != ERROR_SUCCESS)
+        return false;
+
+    FILETIME nowFt = {0};
+    GetSystemTimeAsFileTime(&nowFt);
+
+    ULARGE_INTEGER now = {0};
+    now.LowPart = nowFt.dwLowDateTime;
+    now.HighPart = nowFt.dwHighDateTime;
+
+    ULONGLONG uptime100ns = GetTickCount64() * 10000ULL;
+    if (now.QuadPart <= uptime100ns)
+        return false;
+
+    ULARGE_INTEGER boot = {0};
+    boot.QuadPart = now.QuadPart - uptime100ns;
+
+    ULARGE_INTEGER changed = {0};
+    changed.LowPart = lastWrite.dwLowDateTime;
+    changed.HighPart = lastWrite.dwHighDateTime;
+
+    return changed.QuadPart > boot.QuadPart;
 }

@@ -8,10 +8,11 @@
 #include "SplashWnd.h"
 
 static const wchar_t* SINGLE_INSTANCE_MUTEX = L"Global\\f1copy_mutex_2026";
+static const wchar_t* COMMAND_MUTEX         = L"Global\\f1copy_command_mutex_2026";
 static const wchar_t* HIDDEN_WND_CLASS      = L"f1copy_HiddenWnd";
 
-// Acquire a session-wide mutex visible across integrity levels (admin / standard).
-static HANDLE AcquireSingleInstanceMutex() {
+// Acquire a global mutex visible across integrity levels (admin / standard).
+static HANDLE AcquireGlobalMutex(const wchar_t* name, bool wait) {
     SECURITY_DESCRIPTOR sd;
     if (!InitializeSecurityDescriptor(&sd, SECURITY_DESCRIPTOR_REVISION))
         return NULL;
@@ -19,15 +20,31 @@ static HANDLE AcquireSingleInstanceMutex() {
         return NULL;
 
     SECURITY_ATTRIBUTES sa = { sizeof(sa), &sd, FALSE };
-    HANDLE hMutex = CreateMutexW(&sa, TRUE, SINGLE_INSTANCE_MUTEX);
+    HANDLE hMutex = CreateMutexW(&sa, FALSE, name);
     if (!hMutex)
         return NULL;
 
-    if (GetLastError() == ERROR_ALREADY_EXISTS) {
+    DWORD waitRes = WaitForSingleObject(hMutex, wait ? INFINITE : 0);
+    if (waitRes != WAIT_OBJECT_0 && waitRes != WAIT_ABANDONED) {
         CloseHandle(hMutex);
         return NULL;
     }
     return hMutex;
+}
+
+static HANDLE AcquireSingleInstanceMutex() {
+    return AcquireGlobalMutex(SINGLE_INSTANCE_MUTEX, false);
+}
+
+static HANDLE AcquireCommandMutex() {
+    return AcquireGlobalMutex(COMMAND_MUTEX, true);
+}
+
+static void ReleaseOwnedMutex(HANDLE hMutex) {
+    if (!hMutex)
+        return;
+    ReleaseMutex(hMutex);
+    CloseHandle(hMutex);
 }
 
 static bool IsAnotherResidentInstanceRunning() {
@@ -49,6 +66,19 @@ static HWND FindResidentWindow() {
     if (hWnd)
         return hWnd;
     return FindWindowW(HIDDEN_WND_CLASS, NULL);
+}
+
+static void StopResidentInstance() {
+    HWND hWnd = FindResidentWindow();
+    if (!hWnd)
+        return;
+
+    PostMessageW(hWnd, WM_CLOSE, 0, 0);
+    for (int i = 0; i < 40; ++i) {
+        Sleep(100);
+        if (!FindResidentWindow())
+            return;
+    }
 }
 
 static void ShowHookInstallError() {
@@ -80,6 +110,11 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmd
         LocalFree(argv);
     }
 
+    if (install && uninstall) {
+        ShowInstallError(L"-install と -uninstall は同時に指定できません。");
+        return 1;
+    }
+
     // --------------------------------------------------------------------
     // Uninstall: restore Scancode Map + remove Task Scheduler entry, then quit
     // --------------------------------------------------------------------
@@ -88,10 +123,13 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmd
             TaskReg::RunAsAdmin(L"-uninstall");
             return 0;
         }
+        HANDLE hCommandMutex = AcquireCommandMutex();
+        if (!hCommandMutex)
+            return 1;
         ScancodeMap::Uninstall();
         TaskReg::Uninstall();
-        HWND hWnd = FindResidentWindow();
-        if (hWnd) PostMessageW(hWnd, WM_CLOSE, 0, 0);
+        StopResidentInstance();
+        ReleaseOwnedMutex(hCommandMutex);
         return 0;
     }
 
@@ -103,14 +141,25 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmd
             TaskReg::RunAsAdmin(L"-install");
             return 0;
         }
+        HANDLE hCommandMutex = AcquireCommandMutex();
+        if (!hCommandMutex)
+            return 1;
+        if (ScancodeMap::HasInstallState()) {
+            ScancodeMap::Uninstall();
+            TaskReg::Uninstall();
+            StopResidentInstance();
+        }
         if (!ScancodeMap::Install()) {
+            ReleaseOwnedMutex(hCommandMutex);
             ShowInstallError(L"Scancode Map の登録に失敗しました。");
             return 1;
         }
         if (!TaskReg::Install()) {
+            ReleaseOwnedMutex(hCommandMutex);
             ShowInstallError(L"タスクスケジューラへの登録に失敗しました。");
             return 1;
         }
+        ReleaseOwnedMutex(hCommandMutex);
         SplashWnd::ShowAndWait(hInstance, SplashMode::Install);
         TaskReg::LaunchAsInteractiveUser();
         return 0;
@@ -126,15 +175,15 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmd
     if (!hMutex)
         return 0;
 
-    if (!TrayIcon::Init(hInstance)) {
-        CloseHandle(hMutex);
+    if (!TrayIcon::Init(hInstance, ScancodeMap::IsPendingReboot())) {
+        ReleaseOwnedMutex(hMutex);
         return 1;
     }
 
     if (!KeyHook::Install()) {
         ShowHookInstallError();
         TrayIcon::Cleanup();
-        CloseHandle(hMutex);
+        ReleaseOwnedMutex(hMutex);
         return 1;
     }
 
@@ -148,6 +197,6 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmd
 
     KeyHook::Uninstall();
     TrayIcon::Cleanup();
-    CloseHandle(hMutex);
+    ReleaseOwnedMutex(hMutex);
     return (int)msg.wParam;
 }

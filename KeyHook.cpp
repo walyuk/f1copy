@@ -3,8 +3,8 @@
 #include <windows.h>
 
 // ---------------------------------------------------------------------------
-// CapsLock -> Ctrl is handled here so the hook can see physical scan 0x3A.
-// ScrollLock -> CapsLock is handled via Scancode Map (ScancodeMap::Install).
+// CapsLock -> Ctrl and ScrollLock -> CapsLock are handled via Scancode Map
+// (ScancodeMap::Install).
 //
 //   F1  -->  Ctrl+C  (Copy)
 //   F2  -->  Ctrl+V  (Paste)
@@ -18,7 +18,6 @@
 static HHOOK g_hHook          = NULL;
 static bool  g_IsF1Down       = false;
 static bool  g_IsF2Down       = false;
-static bool  g_IsCapsDown     = false;
 static bool  g_IsLCtrlDown    = false;
 static bool  g_IsRCtrlDown    = false;
 
@@ -29,10 +28,6 @@ static INPUT MakeKeyInput(WORD vk, bool isDown) {
     inp.ki.dwFlags = isDown ? 0 : KEYEVENTF_KEYUP;
     inp.ki.dwExtraInfo = INJECTED_KEY_INFO;
     return inp;
-}
-
-static bool IsPhysicalCapsLock(const KBDLLHOOKSTRUCT* pKey) {
-    return pKey->vkCode == VK_CAPITAL && pKey->scanCode == 0x3A;
 }
 
 static bool IsFromRealCtrlKey(const KBDLLHOOKSTRUCT* pKey) {
@@ -54,30 +49,11 @@ static void SyncTrackedKeyStates() {
         g_IsF1Down = false;
     if (g_IsF2Down && !(GetAsyncKeyState(VK_F2) & 0x8000))
         g_IsF2Down = false;
-    if (g_IsCapsDown && !g_IsLCtrlDown && !g_IsRCtrlDown
-        && !(GetAsyncKeyState(VK_LCONTROL) & 0x8000))
-        g_IsCapsDown = false;
 }
 
 static bool IsRealCtrlHeld() {
     return (g_IsLCtrlDown && (GetAsyncKeyState(VK_LCONTROL) & 0x8000))
         || (g_IsRCtrlDown && (GetAsyncKeyState(VK_RCONTROL) & 0x8000));
-}
-
-static void SendInjectedCtrl(bool isDown) {
-    INPUT inp = MakeKeyInput(VK_LCONTROL, isDown);
-    SendInput(1, &inp, sizeof(INPUT));
-}
-
-static void SendPlainFnBypassingCtrl(WORD vk) {
-    INPUT inputs[5] = {
-        MakeKeyInput(VK_LCONTROL, false),
-        MakeKeyInput(VK_RCONTROL, false),
-        MakeKeyInput(vk,          true),
-        MakeKeyInput(vk,          false),
-        MakeKeyInput(VK_LCONTROL, true),
-    };
-    SendInput(5, inputs, sizeof(INPUT));
 }
 
 static void SendCtrlKey(WORD vk) {
@@ -108,12 +84,6 @@ LRESULT CALLBACK LowLevelKeyboardProc(int nCode, WPARAM wParam, LPARAM lParam) {
 
     SyncTrackedKeyStates();
 
-    if (IsPhysicalCapsLock(pKey)) {
-        g_IsCapsDown = isDown;
-        SendInjectedCtrl(isDown);
-        return 1;
-    }
-
     if (IsFromRealCtrlKey(pKey)) {
         if (vk == VK_LCONTROL) g_IsLCtrlDown = isDown;
         if (vk == VK_RCONTROL) g_IsRCtrlDown = isDown;
@@ -132,16 +102,6 @@ LRESULT CALLBACK LowLevelKeyboardProc(int nCode, WPARAM wParam, LPARAM lParam) {
 
         bool& physDown = (vk == VK_F1) ? g_IsF1Down : g_IsF2Down;
         bool realCtrlDown = IsRealCtrlHeld();
-
-        if (g_IsCapsDown && !realCtrlDown) {
-            if (isDown && !physDown) {
-                physDown = true;
-                SendPlainFnBypassingCtrl(vk);
-            } else if (!isDown) {
-                physDown = false;
-            }
-            return 1;
-        }
 
         if (realCtrlDown)
             return CallNextHookEx(g_hHook, nCode, wParam, lParam);
@@ -163,7 +123,6 @@ LRESULT CALLBACK LowLevelKeyboardProc(int nCode, WPARAM wParam, LPARAM lParam) {
 bool KeyHook::Install() {
     g_IsF1Down = false;
     g_IsF2Down = false;
-    g_IsCapsDown = false;
     g_IsLCtrlDown = false;
     g_IsRCtrlDown = false;
 
@@ -178,7 +137,6 @@ void KeyHook::Uninstall() {
         g_hHook    = NULL;
         g_IsF1Down = false;
         g_IsF2Down = false;
-        g_IsCapsDown = false;
         g_IsLCtrlDown = false;
         g_IsRCtrlDown = false;
     }

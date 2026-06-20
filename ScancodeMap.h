@@ -15,6 +15,13 @@ public:
 
     // Returns true if our remappings are currently present in the registry.
     static bool IsInstalled();
+
+    // Returns true if f1copy has an install marker or current remappings.
+    static bool HasInstallState();
+
+    // Returns true when the registry contains our map but it was changed after
+    // this Windows session started, so a reboot is still needed.
+    static bool IsPendingReboot();
 };
 
 #endif

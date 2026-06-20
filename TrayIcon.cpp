@@ -59,7 +59,7 @@ LRESULT CALLBACK HiddenWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam
     return DefWindowProc(hwnd, msg, wParam, lParam);
 }
 
-bool TrayIcon::Init(HINSTANCE hInstance) {
+bool TrayIcon::Init(HINSTANCE hInstance, bool keymapPendingReboot) {
     g_hInst = hInstance;
     g_uTaskbarCreatedMsg = RegisterWindowMessageW(L"TaskbarCreated");
 
@@ -84,7 +84,11 @@ bool TrayIcon::Init(HINSTANCE hInstance) {
     g_nid.uFlags = NIF_ICON | NIF_MESSAGE | NIF_TIP;
     g_nid.uCallbackMessage = WM_APP_TRAYMSG;
     g_nid.hIcon = LoadIconW(hInstance, MAKEINTRESOURCEW(IDI_F1COPY_ICON));
-    lstrcpyW(g_nid.szTip, L"f1copy (Double click to exit)");
+    lstrcpyW(
+        g_nid.szTip,
+        keymapPendingReboot
+            ? L"キーマップが反映されていません。再起動して下さい"
+            : L"f1copy (Double click to exit)");
 
     AddTrayIconWithRetry();
     return true;

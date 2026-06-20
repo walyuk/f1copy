@@ -5,7 +5,7 @@
 
 class TrayIcon {
 public:
-    static bool Init(HINSTANCE hInstance);
+    static bool Init(HINSTANCE hInstance, bool keymapPendingReboot);
     static void Cleanup();
 };
 
